@@ -1,0 +1,50 @@
+'1':
+  color: RED
+  effect: ''
+  health: 100
+  height: 64
+  hit_progress: 0
+  id: 1
+  images:
+    movement: .Assetes\guy_red.png
+  inventory: {}
+  keys:
+    DOWN: 115
+    LEFT: 97
+    RIGHT: 100
+    SHOOT: 1073742048
+    UP: 119
+  movement_block: false
+  movement_direction: 0
+  movement_velocity: 5
+  name: Bob the baseballer
+  sound_effect: {}
+  weapon: baseball_bat
+  width: 64
+  x: 100
+  y: 100
+'2':
+  color: BLUE
+  effect: ''
+  health: 100
+  height: 64
+  hit_progress: 0
+  id: 1
+  images:
+    movement: .Assetes\guy_blue.png
+  inventory: {}
+  keys:
+    DOWN: 1073741905
+    LEFT: 1073741904
+    RIGHT: 1073741903
+    SHOOT: 1073742052
+    UP: 1073741906
+  movement_block: false
+  movement_direction: 0
+  movement_velocity: 5
+  name: Bill the baseballer
+  sound_effect: {}
+  weapon: baseball_bat
+  width: 64
+  x: 600
+  y: 100

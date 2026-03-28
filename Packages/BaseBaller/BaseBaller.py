@@ -1,0 +1,280 @@
+import pygame
+import os
+from dataclasses import dataclass
+pygame.font.init()
+pygame.mixer.init()
+import tkinter as tk
+from collections import deque
+
+root = tk.Tk()
+WIDTH = root.winfo_screenwidth()
+HEIGHT = root.winfo_screenheight() - 50
+
+current_dir = os.getcwd()
+
+weapons = {'baseball_bat': {'height':60, 'width': 60, 'velocity': 10, 'max_frames': 6, 'damage': 10, 'slide': 20},
+           }
+
+colors = {'RED': (255, 0, 0), 'BLUE': (0, 0, 255)}
+
+@dataclass
+class BaseBaller():
+    id: int
+    name: str
+    color: str
+    x: int
+    y: int
+    inventory: dict
+    effect: str
+    action:str
+    images: dict
+    sound_effect: dict
+    keys: dict # [pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s, pygame.K_LCTRL]
+    movement_history_lenght: int = 240
+    lava_delay: int = 60
+    score: int = 0
+    width: int = 60
+    height: int = 60
+    health: int = 100
+    weapon: str = 'baseball_bat'
+    hit_progress: int = 0
+    movement_velocity: int = 5
+    movement_direction: int = 0
+    movement_block: bool = False
+    movement_erosion_history: any = None
+    movement_lava_history: any = None
+    shoot_block: bool = False
+    slide_bool: bool = False
+    slide_progress: int = 0
+    slide_direction: int = 0
+    slide_distance: int = 0
+    slide_velocity: int = 0
+
+    ''' ----------POST INITIALIZATION METHODS---------- '''
+
+    def post_init(self):
+        self.generate_rect()
+        self.generate_images()
+        self.fill_movement_lava_history()
+
+    def fill_movement_lava_history(self):
+        self.movement_lava_history = deque([])
+        self.movement_erosion_history = deque([])
+
+    def generate_rect(self):
+        self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
+        return self.get_rect()
+
+    def generate_images(self):
+        keys = list(self.images.keys())
+        scaled_images = []
+        for key, item in self.images.items():
+            image = pygame.image.load(os.path.join(current_dir, 'Assets', item))
+            scaled_images.append(pygame.transform.scale(image, (self.width, self.height)))
+        res = {keys[i]: scaled_images[i] for i in range(len(keys))}
+        self.images = res
+
+    ''' ----------GETTERS---------- '''
+
+    def get_action(self):
+        return self.action
+    
+    def get_images(self):
+        return self.images
+
+    def get_rect(self): # What a great method name :-)
+        return self.rect
+    
+    def get_movement_direction(self):
+        return self.movement_direction
+    
+    def get_shoot_block(self):
+        return self.shoot_block
+    
+    def get_movement_lava_history(self):
+        return self.movement_lava_history
+    
+    def get_movement_erosion_history(self):
+        return self.movement_erosion_history
+    
+    def get_movement_history_lenght(self):
+        return self.movement_history_lenght
+    
+    def get_id(self):
+        return self.id
+    
+    def get_health(self):
+        return self.health
+    
+    def get_name(self):
+        return self.name
+    
+    def get_color(self):
+        return self.color
+
+    def get_shoot_key(self):
+        return self.keys['SHOOT']
+    
+    def get_health_bar(self):
+        health = self.get_health()
+        green_pixel = int((self.height * (health / 100.0)) + 0.5)
+        red_pixel = self.height - green_pixel
+        rect_green = pygame.Rect(self.x + 50, self.y, 10, green_pixel)
+        rect_red = pygame.Rect(self.x + 50, self.y + green_pixel, 10, red_pixel)
+        return rect_green, rect_red
+    
+    ''' ----------OTHERS---------- '''
+
+    def movement_handle(self, keys_pressed, obstacles):
+        ''' MOVE WITH THE CHARACTER AND CHECK FOR OBSTACLES '''
+        other_obstacles = obstacles.copy()
+        other_obstacles.remove(self.rect)
+        if self.movement_block:
+            return None
+        if keys_pressed[self.keys['LEFT']] and self.x - self.movement_velocity > 0:  # LEFT
+            self.x -= self.movement_velocity
+            self.movement_direction = 0
+        elif keys_pressed[self.keys['RIGHT']] and self.x + self.movement_velocity + self.width < WIDTH:  # RIGHT
+            self.x += self.movement_velocity
+            self.movement_direction = 1
+        elif keys_pressed[self.keys['UP']] and self.y - self.movement_velocity > 0:  # UP
+            self.y -= self.movement_velocity
+            self.movement_direction = 2
+        elif keys_pressed[self.keys['DOWN']] and self.y + self.movement_velocity + self.height < HEIGHT - 15:  # DOWN
+            self.y += self.movement_velocity
+            self.movement_direction = 3
+
+        self.rect.x, self.rect.y = self.x, self.y # update the rectangle
+
+        self.check_for_collision(other_obstacles, self.movement_direction)
+
+        if len(self.movement_erosion_history) == self.lava_delay:
+            lava_point = self.movement_erosion_history.pop()
+            self.movement_lava_history.appendleft(lava_point)
+        
+        self.movement_erosion_history.appendleft((self.x + self.width//2, self.y + self.height//2))
+        
+        if len(self.movement_lava_history) == self.movement_history_lenght - self.lava_delay:
+            self.movement_lava_history.pop()
+        
+        return self.rect
+
+    def slide_handle(self, obstacles):
+        other_obstacles = obstacles.copy()
+        other_obstacles.remove(self.rect)
+
+        if self.slide_progress == self.slide_distance:
+            self.slide_progress = 0
+            self.slide_bool = False
+        
+        if self.slide_direction == 0:  # LEFT
+            self.x -= self.slide_velocity
+        elif self.slide_direction == 1:  # RIGHT
+            self.x += self.slide_velocity
+        elif self.slide_direction == 2:  # UP
+            self.y -= self.slide_velocity
+        elif self.slide_direction == 3:  # DOWN
+            self.y += self.slide_velocity
+
+        self.slide_progress += 1
+        self.rect.x, self.rect.y = self.x, self.y # update the rectangle
+
+        self.check_for_collision(other_obstacles, self.slide_direction)
+
+    def check_for_collision(self, obstacles, direction):
+        for obstacle in obstacles:
+            if self.rect.colliderect(obstacle):
+                if direction == 0:
+                    self.x = obstacle.x + obstacle.width
+                if direction == 1:
+                    self.x = obstacle.x - self.width
+                if direction == 2:
+                    self.y = obstacle.y + obstacle.height
+                if direction == 3:
+                    self.y = obstacle.y - self.height
+        self.rect.x, self.rect.y = self.x, self.y
+
+    def start_slide(self, slide_direction, slide_dist, slide_velocity):
+        self.slide_bool = True
+        self.slide_direction = slide_direction
+        self.slide_distance = slide_dist
+        self.slide_velocity = slide_velocity
+
+    def update_slide(self, obstacles):
+        if self.slide_bool:
+            self.slide_handle(obstacles)
+
+    def reset_slide_progress(self):
+        self.slide_progress = 0
+
+    def reset_movement_block(self):
+        self.movement_block = False
+
+    def reset_shoot_block(self):
+        self.shoot_block = False
+
+    def reset_hit_progress(self):
+        self.hit_progress = 0
+
+    def loose_health(self, x):
+        self.health -= x
+
+    def start_shooting(self):
+        self.movement_block = True
+        self.shoot_block = True
+        
+    def update_shooting(self, players):
+        if not self.shoot_block:
+            return (None, None)
+        if self.weapon == 'baseball_bat':
+            return self.baseball_bat_movement(players)
+    
+    def check_for_lava(self, lavas):
+        for lava in lavas:
+            if len(lava) >= 2:
+                for i in range(len(lava)-1):
+                    if self.rect.clipline(lava[i], lava[i+1]):
+                        self.loose_health(1)
+                        return 0
+    
+    def baseball_bat_movement(self, players):
+        bat = weapons[self.weapon]
+        if self.hit_progress == bat['max_frames']:
+            self.reset_shoot_block()
+            self.reset_movement_block()
+            self.reset_hit_progress()
+        if self.movement_direction == 0: # LEFT
+            bat_x = self.x - self.hit_progress * bat['velocity']
+            bat_y = self.y
+            bat_width = self.hit_progress * bat['velocity']
+            bat_height = bat['width']
+        if self.movement_direction == 1: # RIGHT
+            bat_x = self.x + self.width
+            bat_y = self.y 
+            bat_width = + self.hit_progress * bat['velocity']
+            bat_height = bat['height']
+        if self.movement_direction == 2: # UP
+            bat_x = self.x
+            bat_y = self.y - self.hit_progress * bat['velocity']
+            bat_width = bat['width']
+            bat_height = self.hit_progress * bat['velocity']
+        if self.movement_direction == 3: # DOWN
+            bat_x = self.x
+            bat_y = self.y + self.height
+            bat_width = bat['width']
+            bat_height = + self.hit_progress * bat['velocity']
+        
+        self.hit_progress += 1
+        bat_rect = pygame.Rect(bat_x, bat_y, bat_width, bat_height)
+        
+        for player in players:
+            if player.get_rect().colliderect(bat_rect):
+                self.score += 1
+                self.reset_shoot_block()
+                self.reset_movement_block()
+                self.reset_hit_progress()
+                player.loose_health(bat['damage'])
+                player.start_slide(self.movement_direction, bat['slide'], bat['velocity'])
+
+        return (self.get_id(), bat_rect)
+

@@ -1,0 +1,28 @@
+Dark magic den:
+  obstacles:
+  - - 0
+    - 0
+    - 0.05
+    - 0.95
+  - - 0.05
+    - 0
+    - 0.9
+    - 0.05
+  - - 0.95
+    - 0
+    - 0.05
+    - 0.95
+  - - 0
+    - 0.95
+    - 1
+    - 0.05
+  renders:
+  - - floor.png
+    - background
+    - 0
+    - 0
+  - - lava.png
+    - lava
+    - 0
+    - 0
+Satan's lair: {}
