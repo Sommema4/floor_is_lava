@@ -2,6 +2,8 @@ import pygame
 import yaml
 import os
 
+__all__ = ['yaml2dict', 'generate_map']
+
 def yaml2dict(file):
     print(file)
     with open(file, 'r') as f:

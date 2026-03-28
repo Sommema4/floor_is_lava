@@ -1,14 +1,15 @@
 import pygame
 import os
 from dataclasses import dataclass
-pygame.font.init()
-pygame.mixer.init()
 import tkinter as tk
 from collections import deque
+
+__all__ = ['BaseBaller', 'WIDTH', 'HEIGHT', 'colors', 'weapons']
 
 root = tk.Tk()
 WIDTH = root.winfo_screenwidth()
 HEIGHT = root.winfo_screenheight() - 50
+root.destroy()
 
 current_dir = os.getcwd()
 
@@ -58,8 +59,9 @@ class BaseBaller():
         self.fill_movement_lava_history()
 
     def fill_movement_lava_history(self):
-        self.movement_lava_history = deque([])
-        self.movement_erosion_history = deque([])
+        # maxlen ensures both deques self-manage their size with no manual .pop() needed
+        self.movement_lava_history = deque([], maxlen=self.movement_history_lenght - self.lava_delay)
+        self.movement_erosion_history = deque([], maxlen=self.lava_delay)
 
     def generate_rect(self):
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
@@ -70,7 +72,16 @@ class BaseBaller():
         scaled_images = []
         for key, item in self.images.items():
             image = pygame.image.load(os.path.join(current_dir, 'Assets', item))
-            scaled_images.append(pygame.transform.scale(image, (self.width, self.height)))
+            scaled = pygame.transform.scale(image, (self.width, self.height))
+            # Pre-rotate for all 4 movement directions so draw_window can blit directly
+            # direction: 0=LEFT(90°), 1=RIGHT(270°), 2=UP(0°), 3=DOWN(180°)
+            rotated = {
+                0: pygame.transform.rotate(scaled, 90),
+                1: pygame.transform.rotate(scaled, 270),
+                2: pygame.transform.rotate(scaled, 0),
+                3: pygame.transform.rotate(scaled, 180),
+            }
+            scaled_images.append(rotated)
         res = {keys[i]: scaled_images[i] for i in range(len(keys))}
         self.images = res
 
@@ -129,35 +140,37 @@ class BaseBaller():
         ''' MOVE WITH THE CHARACTER AND CHECK FOR OBSTACLES '''
         other_obstacles = obstacles.copy()
         other_obstacles.remove(self.rect)
-        if self.movement_block:
-            return None
-        if keys_pressed[self.keys['LEFT']] and self.x - self.movement_velocity > 0:  # LEFT
-            self.x -= self.movement_velocity
-            self.movement_direction = 0
-        elif keys_pressed[self.keys['RIGHT']] and self.x + self.movement_velocity + self.width < WIDTH:  # RIGHT
-            self.x += self.movement_velocity
-            self.movement_direction = 1
-        elif keys_pressed[self.keys['UP']] and self.y - self.movement_velocity > 0:  # UP
-            self.y -= self.movement_velocity
-            self.movement_direction = 2
-        elif keys_pressed[self.keys['DOWN']] and self.y + self.movement_velocity + self.height < HEIGHT - 15:  # DOWN
-            self.y += self.movement_velocity
-            self.movement_direction = 3
+        if not self.movement_block:
+            if keys_pressed[self.keys['LEFT']] and self.x - self.movement_velocity > 0:  # LEFT
+                self.x -= self.movement_velocity
+                self.movement_direction = 0
+            elif keys_pressed[self.keys['RIGHT']] and self.x + self.movement_velocity + self.width < WIDTH:  # RIGHT
+                self.x += self.movement_velocity
+                self.movement_direction = 1
+            elif keys_pressed[self.keys['UP']] and self.y - self.movement_velocity > 0:  # UP
+                self.y -= self.movement_velocity
+                self.movement_direction = 2
+            elif keys_pressed[self.keys['DOWN']] and self.y + self.movement_velocity + self.height < HEIGHT - 15:  # DOWN
+                self.y += self.movement_velocity
+                self.movement_direction = 3
 
-        self.rect.x, self.rect.y = self.x, self.y # update the rectangle
+            self.rect.x, self.rect.y = self.x, self.y # update the rectangle
+            self.check_for_collision(other_obstacles, self.movement_direction)
 
-        self.check_for_collision(other_obstacles, self.movement_direction)
+        # Trail always advances at constant speed, regardless of movement_block
+        self._record_trail_point(self.x + self.width // 2, self.y + self.height // 2)
 
-        if len(self.movement_erosion_history) == self.lava_delay:
-            lava_point = self.movement_erosion_history.pop()
-            self.movement_lava_history.appendleft(lava_point)
-        
-        self.movement_erosion_history.appendleft((self.x + self.width//2, self.y + self.height//2))
-        
-        if len(self.movement_lava_history) == self.movement_history_lenght - self.lava_delay:
-            self.movement_lava_history.pop()
-        
         return self.rect
+
+    def _record_trail_point(self, cx, cy):
+        """Record current position every frame.
+        When the erosion buffer (maxlen=lava_delay) is full, the oldest point
+        is about to be auto-dropped — graduate it to lava first.
+        This ensures lava advances at a constant one-point-per-frame rate
+        regardless of whether the player is moving or standing still."""
+        if len(self.movement_erosion_history) >= self.lava_delay:
+            self.movement_lava_history.appendleft(self.movement_erosion_history[-1])
+        self.movement_erosion_history.appendleft((cx, cy))
 
     def slide_handle(self, obstacles):
         other_obstacles = obstacles.copy()
@@ -230,12 +243,25 @@ class BaseBaller():
             return self.baseball_bat_movement(players)
     
     def check_for_lava(self, lavas):
+        rx1 = self.rect.x
+        ry1 = self.rect.y
+        rx2 = rx1 + self.rect.width
+        ry2 = ry1 + self.rect.height
         for lava in lavas:
-            if len(lava) >= 2:
-                for i in range(len(lava)-1):
-                    if self.rect.clipline(lava[i], lava[i+1]):
-                        self.loose_health(1)
-                        return 0
+            pts = lava  # deque, iterate directly
+            prev = None
+            for pt in pts:
+                if prev is not None:
+                    # Bounding-box rejection: skip segment if it can't possibly touch player rect
+                    sx1 = min(prev[0], pt[0])
+                    sy1 = min(prev[1], pt[1])
+                    sx2 = max(prev[0], pt[0])
+                    sy2 = max(prev[1], pt[1])
+                    if sx2 >= rx1 and sx1 <= rx2 and sy2 >= ry1 and sy1 <= ry2:
+                        if self.rect.clipline(prev, pt):
+                            self.loose_health(1)
+                            return 0
+                prev = pt
     
     def baseball_bat_movement(self, players):
         bat = weapons[self.weapon]
