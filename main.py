@@ -1,6 +1,7 @@
 import pygame
 import math
 import os
+import random
 from Packages import BaseBaller as BB
 from Packages.MapGenerator import yaml2dict, generate_map
 pygame.font.init()
@@ -68,7 +69,102 @@ ZONE_SHRINK_SPEED = 0.04   # pixels per frame (~2.4 px/s at 60 FPS) — adjust f
 ZONE_LAVA_DAMAGE  = 1      # health lost per frame while standing in border lava
 zone_inset        = 0.0    # current border width in pixels (grows every frame)
 
+# --- Health pickup ---
+PICKUP_HEAL            = 30          # HP restored on collection (capped at 100)
+PICKUP_SIZE            = 45          # px — slightly smaller than the baller (60 px)
+PICKUP_ANNOUNCE_FRAMES = 120          # frames of ripple indicator before spawning (~2 s)
+PICKUP_ACTIVE_FRAMES   = 600         # frames before auto-despawn if uncollected (~10 s)
+PICKUP_INTERVAL_MIN    = 3 * FPS    # min frames between spawns
+PICKUP_INTERVAL_MAX    = 10 * FPS    # max frames between spawns
+PICKUP_RING_MAX_R      = 55          # max radius of announcement ripple rings
+PICKUP_GLOW_SPEED      = 0.20        # sin speed for active glow pulse
+
+pickup_state          = None         # None | 'announcing' | 'active'
+pickup_pos            = (0, 0)       # (cx, cy) centre of the pickup
+pickup_announce_frame = 0
+pickup_active_frame   = 0
+pickup_next_in        = random.randint(PICKUP_INTERVAL_MIN, PICKUP_INTERVAL_MAX)
+
+_heart_img = pygame.transform.scale(
+    pygame.image.load(os.path.join(image_dir, 'heart.png')).convert_alpha(),
+    (PICKUP_SIZE, PICKUP_SIZE)
+)
+
 ''' ------ END OF GLOBAL VARIABLES ------ '''
+
+def _random_safe_pos():
+    """Return a random (cx, cy) well inside the current safe zone."""
+    margin = int(zone_inset) + PICKUP_SIZE + 10
+    cx = random.randint(margin, BB.WIDTH  - margin)
+    cy = random.randint(margin, BB.HEIGHT - margin)
+    return (cx, cy)
+
+def draw_pickup(win):
+    """Draw the ripple announcement or the glowing heart, depending on pickup_state."""
+    if pickup_state is None:
+        return
+    cx, cy = pickup_pos
+
+    if pickup_state == 'announcing':
+        # 3 staggered expanding ripple rings
+        phase = pickup_announce_frame / PICKUP_ANNOUNCE_FRAMES
+        for i in range(3):
+            t = (phase + i / 3.0) % 1.0
+            r = int(PICKUP_RING_MAX_R * t)
+            if r < 2:
+                continue
+            alpha = int(230 * (1.0 - t))
+            ring_surf = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(ring_surf, (255, 80, 80, alpha), (r + 2, r + 2), r, 3)
+            win.blit(ring_surf, (cx - r - 2, cy - r - 2))
+        # Pulsing centre dot
+        dot_r = int(6 + 3 * math.sin(pickup_announce_frame * 0.25))
+        pygame.draw.circle(win, (255, 120, 120), (cx, cy), dot_r)
+
+    elif pickup_state == 'active':
+        # Additive glow circle behind the heart
+        glow_r = PICKUP_SIZE
+        glow_t = 0.5 + 0.5 * math.sin(pickup_active_frame * PICKUP_GLOW_SPEED)
+        glow_a = int(60 + 100 * glow_t)
+        glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow_surf, (255, 60, 60, glow_a), (glow_r, glow_r), glow_r)
+        win.blit(glow_surf, (cx - glow_r, cy - glow_r), special_flags=pygame.BLEND_ADD)
+        # Heart image centred on (cx, cy)
+        win.blit(_heart_img, (cx - PICKUP_SIZE // 2, cy - PICKUP_SIZE // 2))
+
+def process_pickup(players):
+    """Advance pickup state machine; heal player on collision."""
+    global pickup_state, pickup_pos, pickup_announce_frame, pickup_active_frame, pickup_next_in
+
+    if pickup_state is None:
+        pickup_next_in -= 1
+        if pickup_next_in <= 0:
+            pickup_pos            = _random_safe_pos()
+            pickup_state          = 'announcing'
+            pickup_announce_frame = 0
+
+    elif pickup_state == 'announcing':
+        pickup_announce_frame += 1
+        if pickup_announce_frame >= PICKUP_ANNOUNCE_FRAMES:
+            pickup_state        = 'active'
+            pickup_active_frame = 0
+
+    elif pickup_state == 'active':
+        pickup_active_frame += 1
+        cx, cy = pickup_pos
+        pickup_rect = pygame.Rect(cx - PICKUP_SIZE // 2, cy - PICKUP_SIZE // 2,
+                                  PICKUP_SIZE, PICKUP_SIZE)
+        for player in players:
+            if player.get_rect().colliderect(pickup_rect):
+                heal = min(PICKUP_HEAL, 100 - player.get_health())
+                if heal > 0:
+                    player.loose_health(-heal)   # loose_health(-n) → health += n
+                pickup_state   = None
+                pickup_next_in = random.randint(PICKUP_INTERVAL_MIN, PICKUP_INTERVAL_MAX)
+                return
+        if pickup_active_frame >= PICKUP_ACTIVE_FRAMES:
+            pickup_state   = None
+            pickup_next_in = random.randint(PICKUP_INTERVAL_MIN, PICKUP_INTERVAL_MAX)
 
 def _zone_border_rects(inset):
     """Return the 4 lava border strips for a given inset (in whole pixels)."""
@@ -169,6 +265,9 @@ def draw_window(renders, players, shots):
         if rect != None:
             pygame.draw.rect(WIN, (255, 0, 0), rect)
 
+    # --- health pickup ---
+    draw_pickup(WIN)
+
     pygame.display.update()
 
 def main():
@@ -243,6 +342,9 @@ def process_frame(players, keys_pressed):
     for player in players:
         if player.get_rect().collidelist(border_rects) != -1:
             player.loose_health(ZONE_LAVA_DAMAGE)
+
+    # Health pickup logic
+    process_pickup(players)
 
 def get_player_obstacles(players):
     global obstacles_players
