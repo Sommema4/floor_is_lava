@@ -29,5 +29,6 @@ def generate_map(width, height, map_dict, image_dir):
     for render in renders:
         (name, token, x, y) = render
         rend = pygame.image.load(os.path.join(image_dir, name))
+        rend = pygame.transform.scale(rend, (width, height))
         render_images.append((rend, token, x, y))
     return obstacle_rectangles, render_images

@@ -20,7 +20,7 @@ map_name = 'Dark magic den'
 obstacles_walls, renders = generate_map(BB.WIDTH, BB.HEIGHT, map_dict[map_name], image_dir)
 obstacles_players = obstacles_walls
 
-WIN = pygame.display.set_mode((BB.WIDTH, BB.HEIGHT))
+WIN = pygame.display.set_mode((BB.WIDTH, BB.HEIGHT), pygame.FULLSCREEN)
 pygame.display.set_caption("The floor is lava")
 
 # Pre-bake static background — only non-lava layers (lava is animated separately)
@@ -45,12 +45,15 @@ _pulse_frame    = 0
 PULSE_SPEED     = 0.035   # radians per game-frame (~3 s cycle at 60 FPS)
 PULSE_MAX_ADD   = 70      # max RGB added at peak (0 = invisible, 255 = blinding)
 
-# Load lava texture — pre-tile 2x2 so any scroll offset crop stays in bounds
+# Load lava texture — pre-tile enough to cover full screen + one extra tile for scroll offset
 _raw_lava  = pygame.image.load(os.path.join(image_dir, 'lava.png')).convert()
 lava_tex_w, lava_tex_h = _raw_lava.get_size()
-_lava_tiled = pygame.Surface((lava_tex_w * 2, lava_tex_h * 2))
-for _ox, _oy in ((0,0),(lava_tex_w,0),(0,lava_tex_h),(lava_tex_w,lava_tex_h)):
-    _lava_tiled.blit(_raw_lava, (_ox, _oy))
+_tile_cols = math.ceil(BB.WIDTH  / lava_tex_w) + 1
+_tile_rows = math.ceil(BB.HEIGHT / lava_tex_h) + 1
+_lava_tiled = pygame.Surface((_tile_cols * lava_tex_w, _tile_rows * lava_tex_h))
+for _row in range(_tile_rows):
+    for _col in range(_tile_cols):
+        _lava_tiled.blit(_raw_lava, (_col * lava_tex_w, _row * lava_tex_h))
 
 # Reusable SRCALPHA surface for lava texture masking — no numpy needed
 # Strategy: fill transparent, draw white-opaque circles, BLEND_RGBA_MULT with texture
@@ -60,7 +63,42 @@ _lava_draw     = pygame.Surface((BB.WIDTH, BB.HEIGHT), pygame.SRCALPHA).convert_
 movement_rotation = {0: 90, 1: 270, 2: 0, 3: 180}  # kept for reference; actual rotation pre-baked in BaseBaller
 shots = []
 
+# Shrinking zone — lava creeps in from all four edges
+ZONE_SHRINK_SPEED = 0.04   # pixels per frame (~2.4 px/s at 60 FPS) — adjust freely
+ZONE_LAVA_DAMAGE  = 1      # health lost per frame while standing in border lava
+zone_inset        = 0.0    # current border width in pixels (grows every frame)
+
 ''' ------ END OF GLOBAL VARIABLES ------ '''
+
+def _zone_border_rects(inset):
+    """Return the 4 lava border strips for a given inset (in whole pixels)."""
+    i = max(0, inset)
+    return [
+        pygame.Rect(0,              0,              BB.WIDTH,     i),            # top
+        pygame.Rect(0,              BB.HEIGHT - i,  BB.WIDTH,     i),            # bottom
+        pygame.Rect(0,              i,              i,            BB.HEIGHT - 2*i),  # left
+        pygame.Rect(BB.WIDTH - i,   i,              i,            BB.HEIGHT - 2*i),  # right
+    ]
+
+def draw_zone_lava(win, inset):
+    """Draw creeping lava border strips using the shared scrolling lava texture."""
+    i = int(inset)
+    if i <= 0:
+        return
+    tx = int(lava_scroll_x) % lava_tex_w
+    ty = int(lava_scroll_y) % lava_tex_h
+    for strip in _zone_border_rects(i):
+        if strip.width > 0 and strip.height > 0:
+            win.set_clip(strip)
+            # Tile _raw_lava to cover the full screen — works for any texture/screen size
+            y = -ty
+            while y < BB.HEIGHT:
+                x = -tx
+                while x < BB.WIDTH:
+                    win.blit(_raw_lava, (x, y))
+                    x += lava_tex_w
+                y += lava_tex_h
+            win.set_clip(None)
 
 def draw_lava_textured(win, players, scroll_x, scroll_y):
     """Render all lava trails as one seamless animated textured body.
@@ -108,6 +146,9 @@ def draw_window(renders, players, shots):
     glow = int(PULSE_MAX_ADD * t)
     _pulse_surface.fill((glow, glow // 3, 0))              # warm orange-red
     WIN.blit(_pulse_surface, (0, 0), special_flags=pygame.BLEND_ADD)
+
+    # --- shrinking zone lava border ---
+    draw_zone_lava(WIN, zone_inset)
 
     # --- lava trails ---
     draw_lava_textured(WIN, players, lava_scroll_x, lava_scroll_y)
@@ -181,7 +222,9 @@ def draw_looser(text):
     pygame.time.delay(5000)
 
 def process_frame(players, keys_pressed):
-    global shots, obstacles_walls, obstacles_players
+    global shots, obstacles_walls, obstacles_players, zone_inset
+
+    zone_inset += ZONE_SHRINK_SPEED
 
     obstacles = obstacles_walls + obstacles_players
     [player.movement_handle(keys_pressed, obstacles) for player in players]
@@ -194,6 +237,12 @@ def process_frame(players, keys_pressed):
 
     lava = [player.get_movement_lava_history() for player in players]
     [player.check_for_lava(lava) for player in players]
+
+    # Zone lava damage — players touching the border lose health
+    border_rects = _zone_border_rects(int(zone_inset))
+    for player in players:
+        if player.get_rect().collidelist(border_rects) != -1:
+            player.loose_health(ZONE_LAVA_DAMAGE)
 
 def get_player_obstacles(players):
     global obstacles_players

@@ -1,15 +1,14 @@
 import pygame
 import os
 from dataclasses import dataclass
-import tkinter as tk
 from collections import deque
 
 __all__ = ['BaseBaller', 'WIDTH', 'HEIGHT', 'colors', 'weapons']
 
-root = tk.Tk()
-WIDTH = root.winfo_screenwidth()
-HEIGHT = root.winfo_screenheight() - 50
-root.destroy()
+pygame.display.init()
+_info = pygame.display.Info()
+WIDTH  = _info.current_w
+HEIGHT = _info.current_h
 
 current_dir = os.getcwd()
 
