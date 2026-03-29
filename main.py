@@ -17,12 +17,13 @@ BLACK = (0, 0, 0)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 FPS = 60
-map_name = 'Dark magic den'
-obstacles_walls, renders = generate_map(BB.WIDTH, BB.HEIGHT, map_dict[map_name], image_dir)
-obstacles_players = obstacles_walls
-
 WIN = pygame.display.set_mode((BB.WIDTH, BB.HEIGHT), pygame.FULLSCREEN)
 pygame.display.set_caption("The floor is lava")
+
+map_name = 'Dark magic den'
+obstacles_walls, renders, props = generate_map(BB.WIDTH, BB.HEIGHT, map_dict[map_name], image_dir)
+obstacles_walls = obstacles_walls + [rect for (_, rect) in props]  # props are solid obstacles
+obstacles_players = obstacles_walls
 
 # Pre-bake static background — only non-lava layers (lava is animated separately)
 # Renders are stored bottom→top, so iterate in reverse to blit bottom layer first
@@ -245,6 +246,12 @@ def draw_window(renders, players, shots):
 
     # --- shrinking zone lava border ---
     draw_zone_lava(WIN, zone_inset)
+
+    # --- props (stumps etc.) above background, below players ---
+    for (img, rect) in props:
+        # Soft drop shadow (offset 4 px down-right, dark semi-transparent)
+        WIN.blit(img, (rect.x + 4, rect.y + 4), special_flags=pygame.BLEND_RGBA_MULT)
+        WIN.blit(img, (rect.x - 2, rect.y - 2))  # outline surface (2 px larger each side)
 
     # --- lava trails ---
     draw_lava_textured(WIN, players, lava_scroll_x, lava_scroll_y)
