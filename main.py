@@ -1,4 +1,5 @@
 import pygame
+import math
 import os
 from Packages import BaseBaller as BB
 from Packages.MapGenerator import yaml2dict, generate_map
@@ -22,21 +23,27 @@ obstacles_players = obstacles_walls
 WIN = pygame.display.set_mode((BB.WIDTH, BB.HEIGHT))
 pygame.display.set_caption("The floor is lava")
 
-# Pre-bake static background — convert all render images once, blit to one surface
+# Pre-bake static background — only non-lava layers (lava is animated separately)
 # Renders are stored bottom→top, so iterate in reverse to blit bottom layer first
 _static_bg = pygame.Surface((BB.WIDTH, BB.HEIGHT)).convert()
 for (img, token, x, y) in reversed(renders):
-    _static_bg.blit(img.convert_alpha() if img.get_flags() & pygame.SRCALPHA else img.convert(), (x, y))
+    if token != 'lava':  # lava layer is scrolled live
+        _static_bg.blit(img.convert_alpha() if img.get_flags() & pygame.SRCALPHA else img.convert(), (x, y))
 
 # Lava rendering settings
 LAVA_RADIUS        = 30   # px — blob radius, roughly half the baller width
-EROSION_RADIUS     = 15   # px — scorched ground radius
 LAVA_SCROLL_DX     = 0.4  # px per game-frame, horizontal flow speed
 LAVA_SCROLL_DY     = 0.2  # px per game-frame, vertical flow speed
 TRAIL_RENDER_STEP  = 8    # skip trail points closer than this many pixels
 
 lava_scroll_x = 0.0
 lava_scroll_y = 0.0
+
+# Ambient pulse — warm orange glow that breathes over the background lava
+_pulse_surface  = pygame.Surface((BB.WIDTH, BB.HEIGHT)).convert()
+_pulse_frame    = 0
+PULSE_SPEED     = 0.035   # radians per game-frame (~3 s cycle at 60 FPS)
+PULSE_MAX_ADD   = 70      # max RGB added at peak (0 = invisible, 255 = blinding)
 
 # Load lava texture — pre-tile 2x2 so any scroll offset crop stays in bounds
 _raw_lava  = pygame.image.load(os.path.join(image_dir, 'lava.png')).convert()
@@ -50,25 +57,10 @@ for _ox, _oy in ((0,0),(lava_tex_w,0),(0,lava_tex_h),(lava_tex_w,lava_tex_h)):
 # → texture shows where circles are, fully transparent elsewhere
 _lava_draw     = pygame.Surface((BB.WIDTH, BB.HEIGHT), pygame.SRCALPHA).convert_alpha()
 
-# Pre-bake erosion stamp (circles drawn once, blitted at runtime)
-_ediam         = EROSION_RADIUS * 2
-_erosion_stamp = pygame.Surface((_ediam, _ediam), pygame.SRCALPHA)
-pygame.draw.circle(_erosion_stamp, (40, 30, 20, 200),
-                   (EROSION_RADIUS, EROSION_RADIUS), EROSION_RADIUS)
-
 movement_rotation = {0: 90, 1: 270, 2: 0, 3: 180}  # kept for reference; actual rotation pre-baked in BaseBaller
 shots = []
 
 ''' ------ END OF GLOBAL VARIABLES ------ '''
-
-def _draw_subsampled(win, points, stamp, half_size):
-    """Blit a pre-baked stamp at each trail point, skipping nearby duplicates."""
-    step_sq = TRAIL_RENDER_STEP ** 2
-    last = None
-    for (x, y) in points:
-        if last is None or (x-last[0])**2 + (y-last[1])**2 >= step_sq:
-            win.blit(stamp, (x - half_size, y - half_size))
-            last = (x, y)
 
 def draw_lava_textured(win, players, scroll_x, scroll_y):
     """Render all lava trails as one seamless animated textured body.
@@ -101,17 +93,21 @@ def draw_lava_textured(win, players, scroll_x, scroll_y):
     win.blit(_lava_draw, (0, 0))
 
 def draw_window(renders, players, shots):
-    global lava_scroll_x, lava_scroll_y
-    lava_scroll_x += LAVA_SCROLL_DX
-    lava_scroll_y += LAVA_SCROLL_DY
+    global lava_scroll_x, lava_scroll_y, _pulse_frame
+    lava_scroll_x    += LAVA_SCROLL_DX
+    lava_scroll_y    += LAVA_SCROLL_DY
+    _pulse_frame     += 1
 
-    # --- background (single blit of pre-baked converted surface) ---
+    # --- background (basalt) ---
     WIN.blit(_static_bg, (0, 0))
 
-    # --- erosion trails ---
-    for player in players:
-        _draw_subsampled(WIN, player.get_movement_erosion_history(),
-                         _erosion_stamp, EROSION_RADIUS)
+    # --- ambient glow pulse over background lava ---
+    # Fill surface each frame with pulsed brightness so BLEND_ADD adds the right amount.
+    # BLEND_ADD ignores set_alpha(), so we modulate the fill color instead.
+    t = 0.5 + 0.5 * math.sin(_pulse_frame * PULSE_SPEED)   # 0.0 → 1.0
+    glow = int(PULSE_MAX_ADD * t)
+    _pulse_surface.fill((glow, glow // 3, 0))              # warm orange-red
+    WIN.blit(_pulse_surface, (0, 0), special_flags=pygame.BLEND_ADD)
 
     # --- lava trails ---
     draw_lava_textured(WIN, players, lava_scroll_x, lava_scroll_y)
