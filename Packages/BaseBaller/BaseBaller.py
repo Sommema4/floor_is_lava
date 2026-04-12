@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from collections import deque
 
-__all__ = ['BaseBaller', 'WIDTH', 'HEIGHT', 'colors', 'weapons']
+__all__ = ['BaseBaller', 'WIDTH', 'HEIGHT', 'colors']
 
 pygame.display.init()
 _info = pygame.display.Info()
@@ -12,9 +12,7 @@ HEIGHT = _info.current_h
 
 current_dir = os.getcwd()
 
-weapons = {'baseball_bat': {'height':60, 'width': 60, 'velocity': 10, 'max_frames': 6, 'damage': 10, 'slide': 20},
-           }
-
+from Packages.Weapons import make_weapon
 colors = {'RED': (255, 0, 0), 'BLUE': (0, 0, 255)}
 
 @dataclass
@@ -50,6 +48,8 @@ class BaseBaller():
     slide_distance: int = 0
     slide_velocity: int = 0
     shield_frames: int = 0
+    magnet_frames: int = 0
+    active_weapon: object = None   # set to a BaseWeapon instance in post_init
 
     ''' ----------POST INITIALIZATION METHODS---------- '''
 
@@ -57,6 +57,7 @@ class BaseBaller():
         self.generate_rect()
         self.generate_images()
         self.fill_movement_lava_history()
+        self.active_weapon = make_weapon(self.weapon)
 
     def fill_movement_lava_history(self):
         # maxlen ensures both deques self-manage their size with no manual .pop() needed
@@ -244,6 +245,30 @@ class BaseBaller():
         if self.shield_frames > 0:
             self.shield_frames -= 1
 
+    def has_magnet(self):
+        return self.magnet_frames > 0
+
+    def activate_magnet(self, frames):
+        """Switch to the magnet weapon for the given number of frames."""
+        from Packages.Weapons import Magnet
+        self.magnet_frames = max(self.magnet_frames, frames)
+        # Only swap if not already holding the magnet
+        if not isinstance(self.active_weapon, Magnet):
+            # Cleanly release whatever is currently active
+            self.active_weapon.on_release(self)
+            self.shoot_block = False
+            self.active_weapon = Magnet()
+
+    def tick_weapon(self):
+        """Count down the magnet timer; revert to default weapon when it expires."""
+        if self.magnet_frames > 0:
+            self.magnet_frames -= 1
+            if self.magnet_frames == 0:
+                # Release magnet cleanly then restore the player's base weapon
+                self.active_weapon.on_release(self)
+                self.shoot_block = False
+                self.active_weapon = make_weapon(self.weapon)
+
     def teleport_to(self, x, y):
         """Instantly move the player to (x, y) and sync the collision rect."""
         self.x, self.y = x, y
@@ -254,14 +279,18 @@ class BaseBaller():
         self.movement_velocity = max(1, min(10, self.movement_velocity + delta))
 
     def start_shooting(self):
-        self.movement_block = True
-        self.shoot_block = True
-        
-    def update_shooting(self, players):
+        """Called on KEYDOWN — delegate to the active weapon's on_press hook."""
+        self.active_weapon.on_press(self)
+
+    def release_shooting(self):
+        """Called on KEYUP — delegate to the active weapon's on_release hook."""
+        self.active_weapon.on_release(self)
+
+    def update_shooting(self, keys_pressed, players):
+        """Called every frame — delegate to the active weapon's update hook."""
         if not self.shoot_block:
             return (None, None)
-        if self.weapon == 'baseball_bat':
-            return self.baseball_bat_movement(players)
+        return self.active_weapon.update(self, keys_pressed, players)
     
     def check_for_lava(self, lavas):
         if self.is_shielded():
@@ -282,48 +311,7 @@ class BaseBaller():
                     sy2 = max(prev[1], pt[1])
                     if sx2 >= rx1 and sx1 <= rx2 and sy2 >= ry1 and sy1 <= ry2:
                         if self.rect.clipline(prev, pt):
-                            self.loose_health(1)
+                            self.loose_health(0.25)
                             return 0
                 prev = pt
-    
-    def baseball_bat_movement(self, players):
-        bat = weapons[self.weapon]
-        if self.hit_progress == bat['max_frames']:
-            self.reset_shoot_block()
-            self.reset_movement_block()
-            self.reset_hit_progress()
-        if self.movement_direction == 0: # LEFT
-            bat_x = self.x - self.hit_progress * bat['velocity']
-            bat_y = self.y
-            bat_width = self.hit_progress * bat['velocity']
-            bat_height = bat['width']
-        if self.movement_direction == 1: # RIGHT
-            bat_x = self.x + self.width
-            bat_y = self.y 
-            bat_width = + self.hit_progress * bat['velocity']
-            bat_height = bat['height']
-        if self.movement_direction == 2: # UP
-            bat_x = self.x
-            bat_y = self.y - self.hit_progress * bat['velocity']
-            bat_width = bat['width']
-            bat_height = self.hit_progress * bat['velocity']
-        if self.movement_direction == 3: # DOWN
-            bat_x = self.x
-            bat_y = self.y + self.height
-            bat_width = bat['width']
-            bat_height = + self.hit_progress * bat['velocity']
-        
-        self.hit_progress += 1
-        bat_rect = pygame.Rect(bat_x, bat_y, bat_width, bat_height)
-        
-        for player in players:
-            if player.get_rect().colliderect(bat_rect):
-                self.score += 1
-                self.reset_shoot_block()
-                self.reset_movement_block()
-                self.reset_hit_progress()
-                player.loose_health(bat['damage'])
-                player.start_slide(self.movement_direction, bat['slide'], bat['velocity'])
-
-        return (self.get_id(), bat_rect)
 

@@ -67,7 +67,7 @@ shots = []
 
 # Shrinking zone — lava creeps in from all four edges
 zone_shrink_speed = 0.04   # pixels per frame (~2.4 px/s at 60 FPS) — mutable
-ZONE_LAVA_DAMAGE  = 1      # health lost per frame while standing in border lava
+ZONE_LAVA_DAMAGE  = 0.25   # health lost per frame while standing in border lava
 zone_inset        = 0.0    # current border width in pixels (grows every frame)
 
 # --- Health pickup ---
@@ -155,6 +155,22 @@ _shield_img = pygame.transform.scale(
     (PICKUP_SIZE, PICKUP_SIZE)
 )
 
+# --- Magnet weapon pickup ---
+MAGNET_DURATION            = 10 * FPS  # frames the magnet weapon lasts (10 seconds)
+MAGNET_PICKUP_INTERVAL_MIN = 10 * FPS
+MAGNET_PICKUP_INTERVAL_MAX = 25 * FPS
+
+magnet_pick_state          = None
+magnet_pick_pos            = (0, 0)
+magnet_pick_announce_frame = 0
+magnet_pick_active_frame   = 0
+magnet_pick_next_in        = random.randint(MAGNET_PICKUP_INTERVAL_MIN, MAGNET_PICKUP_INTERVAL_MAX)
+
+_magnet_pick_img = pygame.transform.scale(
+    pygame.image.load(os.path.join(image_dir, 'magnet.jpg')).convert(),
+    (PICKUP_SIZE, PICKUP_SIZE)
+)
+
 ''' ------ END OF GLOBAL VARIABLES ------ '''
 
 def _random_safe_pos():
@@ -227,6 +243,15 @@ def _draw_generic_pickup(win, state, pos, announce_frame, active_frame, img, rin
         win.blit(img, (cx - PICKUP_SIZE // 2, cy - PICKUP_SIZE // 2))
 
 
+def draw_magnet_pickup(win):
+    """Draw the magnet weapon pickup ripple or icon."""
+    _draw_generic_pickup(win, magnet_pick_state, magnet_pick_pos,
+                         magnet_pick_announce_frame, magnet_pick_active_frame,
+                         _magnet_pick_img,
+                         ring_color=(255, 220, 40),
+                         glow_color=(220, 180, 20))
+
+
 def draw_teleport_pickup(win):
     """Draw the teleport pickup ripple or icon."""
     _draw_generic_pickup(win, teleport_state, teleport_pos,
@@ -296,6 +321,40 @@ def process_pickup(players):
         if pickup_active_frame >= PICKUP_ACTIVE_FRAMES:
             pickup_state   = None
             pickup_next_in = random.randint(PICKUP_INTERVAL_MIN, PICKUP_INTERVAL_MAX)
+
+def process_magnet_pickup(players):
+    """Advance magnet pickup state machine; grant magnet weapon on collision."""
+    global magnet_pick_state, magnet_pick_pos, magnet_pick_announce_frame
+    global magnet_pick_active_frame, magnet_pick_next_in
+
+    if magnet_pick_state is None:
+        magnet_pick_next_in -= 1
+        if magnet_pick_next_in <= 0:
+            magnet_pick_pos            = _random_safe_pos()
+            magnet_pick_state          = 'announcing'
+            magnet_pick_announce_frame = 0
+
+    elif magnet_pick_state == 'announcing':
+        magnet_pick_announce_frame += 1
+        if magnet_pick_announce_frame >= PICKUP_ANNOUNCE_FRAMES:
+            magnet_pick_state        = 'active'
+            magnet_pick_active_frame = 0
+
+    elif magnet_pick_state == 'active':
+        magnet_pick_active_frame += 1
+        cx, cy = magnet_pick_pos
+        pickup_rect = pygame.Rect(cx - PICKUP_SIZE // 2, cy - PICKUP_SIZE // 2,
+                                  PICKUP_SIZE, PICKUP_SIZE)
+        for player in players:
+            if player.get_rect().colliderect(pickup_rect):
+                player.activate_magnet(MAGNET_DURATION)
+                magnet_pick_state   = None
+                magnet_pick_next_in = random.randint(MAGNET_PICKUP_INTERVAL_MIN, MAGNET_PICKUP_INTERVAL_MAX)
+                return
+        if magnet_pick_active_frame >= PICKUP_ACTIVE_FRAMES:
+            magnet_pick_state   = None
+            magnet_pick_next_in = random.randint(MAGNET_PICKUP_INTERVAL_MIN, MAGNET_PICKUP_INTERVAL_MAX)
+
 
 def process_teleport_pickup(players):
     """Advance teleport pickup state machine; swap all players' positions on collision."""
@@ -536,6 +595,8 @@ def draw_window(renders, players, shots):
         action = player.get_action()
         images = player.get_images()
         WIN.blit(images[action][movement_direction], (rect.x, rect.y))
+        # Weapon overlay (magnet cone, etc.)
+        player.active_weapon.draw(WIN, player)
         # Shield bubble — pulsing cyan ring around shielded players
         if player.is_shielded():
             pulse = 0.55 + 0.45 * math.sin(pygame.time.get_ticks() * 0.008)
@@ -565,6 +626,9 @@ def draw_window(renders, players, shots):
     draw_teleport_pickup(WIN)
     draw_shield_pickup(WIN)
 
+    # --- magnet weapon pickup ---
+    draw_magnet_pickup(WIN)
+
     pygame.display.update()
 
 def main():
@@ -590,8 +654,12 @@ def main():
             if event.type == pygame.KEYDOWN:
                 pass
                 for player in players:
-                    if event.key == player.get_shoot_key() and not player.get_shoot_block(): # check if shoot key was pressed and if the player is already not in the middle of a swing with its baseball bat
+                    if event.key == player.get_shoot_key() and not player.get_shoot_block():
                         player.start_shooting()
+            if event.type == pygame.KEYUP:
+                for player in players:
+                    if event.key == player.get_shoot_key():
+                        player.release_shooting()
 
         keys_pressed = pygame.key.get_pressed()
 
@@ -627,19 +695,22 @@ def process_frame(players, keys_pressed):
     get_player_obstacles(players)
 
     obstacles = obstacles_walls + obstacles_players
-    shots = [player.update_shooting(players) for player in players]
+    shots = [player.update_shooting(keys_pressed, players) for player in players]
     [player.update_slide(obstacles_walls + obstacles_players) for player in players]
     get_player_obstacles(players)
 
     lava = [player.get_movement_lava_history() for player in players]
-    [player.check_for_lava(lava) for player in players]
 
-    # Tick shields and apply zone lava damage (shielded players are immune)
+    # Lava damage — trail and border are mutually exclusive per frame (no double damage)
+    # check_for_lava returns 0 when it dealt damage, None when it didn't
     border_rects = _zone_border_rects(int(zone_inset))
     for player in players:
         player.tick_shield()
-        if not player.is_shielded() and player.get_rect().collidelist(border_rects) != -1:
-            player.loose_health(ZONE_LAVA_DAMAGE)
+        player.tick_weapon()
+        if not player.is_shielded():
+            trail_hit = player.check_for_lava(lava)
+            if trail_hit is None and player.get_rect().collidelist(border_rects) != -1:
+                player.loose_health(ZONE_LAVA_DAMAGE)
 
     # Health pickup logic
     process_pickup(players)
@@ -651,6 +722,9 @@ def process_frame(players, keys_pressed):
     # Teleport & shield pickup logic
     process_teleport_pickup(players)
     process_shield_pickup(players)
+
+    # Magnet weapon pickup logic
+    process_magnet_pickup(players)
 
 def get_player_obstacles(players):
     global obstacles_players

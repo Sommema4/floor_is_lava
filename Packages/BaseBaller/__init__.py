@@ -1,1 +1,1 @@
-from .BaseBaller import BaseBaller, WIDTH, HEIGHT, colors, weapons
+from .BaseBaller import BaseBaller, WIDTH, HEIGHT, colors
