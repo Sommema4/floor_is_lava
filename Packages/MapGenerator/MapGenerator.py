@@ -40,15 +40,18 @@ def generate_map(width, height, map_dict, image_dir):
         ph = int(prop['h'] * height)
         img = pygame.image.load(os.path.join(image_dir, prop['name'])).convert_alpha()
         img = pygame.transform.scale(img, (pw, ph))
-        # Pre-bake a 2 px bright outline for contrast against dark backgrounds
-        outline = pygame.Surface((pw + 4, ph + 4), pygame.SRCALPHA)
-        for ox, oy in ((-2,0),(2,0),(0,-2),(0,2),(-2,-2),(2,-2),(-2,2),(2,2)):
-            outline.blit(img, (2 + ox, 2 + oy))
-        # Tint the offset copies to a warm yellow outline colour
-        tint = pygame.Surface((pw + 4, ph + 4), pygame.SRCALPHA)
-        tint.fill((220, 180, 60, 180))
-        outline.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        outline.blit(img, (2, 2))  # original image on top, unmodified
-        rect = pygame.Rect(px, py, pw, ph)
-        props.append((outline, rect))
+        # Auto-crop transparent padding
+        bounds = img.get_bounding_rect(min_alpha=1)
+        img_cropped = img.subsurface(bounds).copy()
+        draw_rect = pygame.Rect(px + bounds.x, py + bounds.y, bounds.width, bounds.height)
+        # collision_scale: shrink hit box to a centred fraction of the drawn area
+        scale = prop.get('collision_scale', 1.0)
+        cw = int(bounds.width  * scale)
+        ch = int(bounds.height * scale)
+        col_rect = pygame.Rect(
+            draw_rect.x + (bounds.width  - cw) // 2,
+            draw_rect.y + (bounds.height - ch) // 2,
+            cw, ch
+        )
+        props.append((img_cropped, draw_rect, col_rect))
     return obstacle_rectangles, render_images, props

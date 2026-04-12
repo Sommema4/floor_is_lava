@@ -49,6 +49,7 @@ class BaseBaller():
     slide_direction: int = 0
     slide_distance: int = 0
     slide_velocity: int = 0
+    shield_frames: int = 0
 
     ''' ----------POST INITIALIZATION METHODS---------- '''
 
@@ -231,6 +232,27 @@ class BaseBaller():
     def loose_health(self, x):
         self.health -= x
 
+    def is_shielded(self):
+        return self.shield_frames > 0
+
+    def activate_shield(self, frames):
+        """Grant lava immunity for the given number of frames (stacks by taking the max)."""
+        self.shield_frames = max(self.shield_frames, frames)
+
+    def tick_shield(self):
+        """Call once per frame to count down the shield."""
+        if self.shield_frames > 0:
+            self.shield_frames -= 1
+
+    def teleport_to(self, x, y):
+        """Instantly move the player to (x, y) and sync the collision rect."""
+        self.x, self.y = x, y
+        self.rect.x, self.rect.y = x, y
+
+    def adjust_speed(self, delta):
+        """Permanently adjust movement_velocity by delta, clamped to [1, 10]."""
+        self.movement_velocity = max(1, min(10, self.movement_velocity + delta))
+
     def start_shooting(self):
         self.movement_block = True
         self.shoot_block = True
@@ -242,6 +264,8 @@ class BaseBaller():
             return self.baseball_bat_movement(players)
     
     def check_for_lava(self, lavas):
+        if self.is_shielded():
+            return
         rx1 = self.rect.x
         ry1 = self.rect.y
         rx2 = rx1 + self.rect.width
